@@ -6,3 +6,5 @@ pydantic-settings
 pwdlib[argon2]
 pyjwt
 python-multipart
+langgraph
+langchain-core

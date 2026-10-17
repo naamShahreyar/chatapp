@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app import models  # noqa: F401  (importing registers the tables on Base)
 from app.db import Base, engine, get_db
-from app.routers import auth
+from app.routers import auth, chat
 
 
 @asynccontextmanager
@@ -17,6 +17,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ChatApp API", lifespan=lifespan)
 app.include_router(auth.router)
+app.include_router(chat.router)
 
 
 @app.get("/health")
