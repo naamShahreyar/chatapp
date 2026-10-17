@@ -67,3 +67,14 @@ def send_message(
     db.commit()
     db.refresh(assistant_message)
     return assistant_message
+
+@router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_conversation(
+    conversation_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    
+    conversation = get_owned_conversation(conversation_id, user, db)
+    db.delete(conversation)
+    db.commit()
