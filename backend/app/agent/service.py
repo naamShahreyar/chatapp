@@ -18,4 +18,11 @@ def generate_reply(history: list[dict]) -> str:
         for m in history
     ]
     result = _get_graph().invoke({"messages": messages})
-    return result["messages"][-1].content
+    return _to_text(result["messages"][-1].content)
+
+def _to_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    return "".join(
+        part.get("text", "") if isinstance(part, dict) else str(part) for part in content
+    )

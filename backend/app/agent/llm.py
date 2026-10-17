@@ -24,4 +24,9 @@ class EchoChatModel(BaseChatModel):
 def get_llm() -> BaseChatModel:
     if settings.llm_provider == "fake":
         return EchoChatModel()
+    if settings.llm_provider == "google":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        return ChatGoogleGenerativeAI(model=settings.llm_model, google_api_key=settings.google_api_key)
     raise ValueError(f"Unknown LLM_PROVIDER: {settings.llm_provider!r}")
+
