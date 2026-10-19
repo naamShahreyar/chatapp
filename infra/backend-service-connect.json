@@ -1,0 +1,12 @@
+{
+  "enabled": true,
+  "namespace": "chatapp",
+  "services": [
+    {
+      "portName": "api",
+      "discoveryName": "backend",
+      "clientAliases": [{ "port": 8000, "dnsName": "backend" }],
+      "timeout": { "perRequestTimeoutSeconds": 90 }
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "family": "chatapp-backend",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "1024",
+  "runtimePlatform": { "cpuArchitecture": "X86_64", "operatingSystemFamily": "LINUX" },
+  "executionRoleArn": "arn:aws:iam::102076848646:role/chatapp-ecs-execution-role",
+  "containerDefinitions": [
+    {
+      "name": "backend",
+      "image": "102076848646.dkr.ecr.ap-south-1.amazonaws.com/chatapp-backend:latest",
+      "essential": true,
+      "portMappings": [
+        { "name": "api", "containerPort": 8000, "protocol": "tcp", "appProtocol": "http" }
+      ],
+      "environment": [
+        { "name": "LLM_PROVIDER", "value": "google" },
+        { "name": "LLM_MODEL", "value": "gemini-3.5-flash-lite" }
+      ],
+      "secrets": [
+        { "name": "DATABASE_URL",   "valueFrom": "arn:aws:ssm:ap-south-1:102076848646:parameter/chatapp/database-url" },
+        { "name": "JWT_SECRET",     "valueFrom": "arn:aws:ssm:ap-south-1:102076848646:parameter/chatapp/jwt-secret" },
+        { "name": "GOOGLE_API_KEY", "valueFrom": "arn:aws:ssm:ap-south-1:102076848646:parameter/chatapp/google-api-key" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/chatapp-backend",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "backend"
+        }
+      }
+    }
+  ]
+}

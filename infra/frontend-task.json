@@ -1,0 +1,30 @@
+{
+  "family": "chatapp-frontend",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "runtimePlatform": { "cpuArchitecture": "X86_64", "operatingSystemFamily": "LINUX" },
+  "executionRoleArn": "arn:aws:iam::102076848646:role/chatapp-ecs-execution-role",
+  "containerDefinitions": [
+    {
+      "name": "frontend",
+      "image": "102076848646.dkr.ecr.ap-south-1.amazonaws.com/chatapp-frontend:latest",
+      "essential": true,
+      "portMappings": [
+        { "name": "web", "containerPort": 8501, "protocol": "tcp", "appProtocol": "http" }
+      ],
+      "environment": [
+        { "name": "API_URL", "value": "http://backend:8000" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/chatapp-frontend",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "frontend"
+        }
+      }
+    }
+  ]
+}
