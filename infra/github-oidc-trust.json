@@ -10,7 +10,8 @@
       "Condition": {
         "StringEquals": {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": "repo:naamShahreyar/chatapp:ref:refs/heads/main"
+          "token.actions.githubusercontent.com:sub": "repo:naamShahreyar@140060453/chatapp@1424456488:ref:refs/heads/main"
+
         }
       }
     }

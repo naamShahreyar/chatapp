@@ -409,6 +409,9 @@ $ALB_ARN = aws elbv2 create-load-balancer --name chatapp-alb --type application 
 $TG_ARN = aws elbv2 create-target-group --name chatapp-frontend-tg --protocol HTTP --port 8501 --vpc-id $VPC --target-type ip --health-check-path /_stcore/health --query "TargetGroups[0].TargetGroupArn" --output text
 
 aws elbv2 create-listener --load-balancer-arn $ALB_ARN --protocol HTTP --port 80 --default-actions "Type=forward,TargetGroupArn=$TG_ARN"
+
+# Draining: wait 30s (default 300s) for old tasks' connections during deploys
+aws elbv2 modify-target-group-attributes --target-group-arn $TG_ARN --attributes Key=deregistration_delay.timeout_seconds,Value=30
 ```
 
 - **Listener:** what to listen for (HTTP on 80) and where to forward it.
@@ -532,11 +535,19 @@ The load balancer still costs about $0.60/day while paused.
 | Service `runningCount` stays at 0 | The task keeps crashing | See the command below |
 | Target stays `unhealthy` | Streamlit isn't responding on 8501 | Check the frontend logs, and that `chatapp-frontend-sg` allows 8501 from `chatapp-alb-sg` |
 | Console region menu has no Mumbai | The console's view lags behind the SCP | Use URLs with `?region=ap-south-1`. The CLI is the source of truth |
+| GitHub Actions: `Not authorized to perform sts:AssumeRoleWithWebIdentity` | The token's `sub` doesn't match the trust policy. GitHub's `sub` now includes owner and repo IDs: `repo:owner@<id>/repo@<id>:ref:refs/heads/main` | Find the exact `sub` in CloudTrail (see below), then put it in `infra/github-oidc-trust.json` and run `aws iam update-assume-role-policy` |
 
 Why did the last task stop?
 
 ```powershell
 aws ecs describe-tasks --cluster chatapp --tasks (aws ecs list-tasks --cluster chatapp --desired-status STOPPED --query "taskArns[0]" --output text) --query "tasks[0].[stoppedReason,containers[0].reason]"
+```
+
+What identity did GitHub present? Recent OIDC attempts from CloudTrail:
+
+```powershell
+$events = aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity --max-results 3 --output json | ConvertFrom-Json
+foreach ($ev in $events.Events) { $e = $ev.CloudTrailEvent | ConvertFrom-Json; "{0} {1} {2}" -f $e.eventTime, $e.errorCode, $e.userIdentity.userName }
 ```
 
 ---
