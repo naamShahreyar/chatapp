@@ -17,6 +17,7 @@ Every AWS step used to deploy ChatApp, in order, with one line on *why* for each
 2. [Push images to ECR](#2-push-images-to-ecr)
 3. [Option A: Deploy on EC2](#3-option-a-deploy-on-ec2)
 4. [Option B: Deploy on ECS Fargate + RDS + ALB](#4-option-b-deploy-on-ecs-fargate--rds--alb)
+   - [4.8 Continuous deployment from GitHub Actions (OIDC)](#48-continuous-deployment-from-github-actions-oidc)
 5. [Day-to-day operations](#5-day-to-day-operations)
 6. [Troubleshooting](#6-troubleshooting)
 7. [Teardown](#7-teardown)
@@ -446,9 +447,69 @@ aws elbv2 describe-load-balancers --names chatapp-alb --query "LoadBalancers[0].
 
 Open **`http://<dns-name>`**. Type the `http://` explicitly, because Chrome may try HTTPS and time out.
 
+### 4.8 Continuous deployment from GitHub Actions (OIDC)
+
+**Why:** every push to `main` is tested, built, pushed and deployed automatically, with **no AWS keys stored in GitHub**. GitHub proves its identity with a short-lived signed token, and AWS swaps it for credentials that last one hour.
+
+```
+push to main ─▶ test ─▶ build ─▶ deploy: OIDC ─▶ ECR push (tag = commit SHA) ─▶ new task def revision ─▶ ECS rolling update
+```
+
+**1. Register GitHub as an identity provider (once per account):**
+
+```powershell
+aws iam create-open-id-connect-provider --url https://token.actions.githubusercontent.com --client-id-list sts.amazonaws.com
+```
+
+**2. Find your exact `sub`.** GitHub's token identifies the workflow as:
+
+```
+repo:<owner>@<owner-id>/<repo>@<repo-id>:ref:refs/heads/main
+```
+
+The numeric IDs make it immune to someone recreating a deleted repo with the same name. Get the IDs with:
+
+```powershell
+(Invoke-RestMethod https://api.github.com/repos/naamShahreyar/chatapp) | Select-Object @{n="owner_id";e={$_.owner.id}}, @{n="repo_id";e={$_.id}}
+```
+
+Put the exact value in `infra/github-oidc-trust.json` (ours is `repo:naamShahreyar@140060453/chatapp@1424456488:ref:refs/heads/main`). If it's wrong, the deploy fails with `Not authorized to perform sts:AssumeRoleWithWebIdentity`, and CloudTrail shows the `sub` GitHub actually sent (see [Troubleshooting](#6-troubleshooting)).
+
+**3. Create the deploy role.** It's trusted only for this repo's `main` branch and can only push to the two ECR repos, register task definitions, update services in cluster `chatapp` and pass the execution role to ECS:
+
+```powershell
+aws iam create-role --role-name chatapp-github-deploy --assume-role-policy-document file://infra/github-oidc-trust.json
+aws iam put-role-policy --role-name chatapp-github-deploy --policy-name chatapp-deploy --policy-document file://infra/github-deploy-policy.json
+# after editing the trust file later:
+aws iam update-assume-role-policy --role-name chatapp-github-deploy --policy-document file://infra/github-oidc-trust.json
+```
+
+**4. The workflow** is `.github/workflows/ci.yml`. The key parts of the `deploy` job:
+
+| Part | Purpose |
+|---|---|
+| `if: github.event_name == 'push' && github.ref == 'refs/heads/main'` | Pull requests test and build but never deploy |
+| `permissions: id-token: write` | Lets the job request an OIDC token. This is what makes keyless access work |
+| `concurrency: deploy-production` | A second push waits instead of racing the first |
+| `aws-actions/configure-aws-credentials` | Exchanges the GitHub token for temporary AWS credentials |
+| Images tagged `${{ github.sha }}` (plus `latest`) | You always know which commit is running, and rollback is easy |
+| `amazon-ecs-render-task-definition` | Puts the new image into `infra/*-task.json` |
+| `amazon-ecs-deploy-task-definition` with `wait-for-service-stability` | Registers a new revision, updates the service and fails the job if the rollout isn't healthy |
+
+**5. Check which commit production runs:**
+
+```powershell
+git rev-parse HEAD
+aws ecs describe-task-definition --task-definition chatapp-backend --query "taskDefinition.containerDefinitions[0].image" --output text
+```
+
+> **The repo is now the source of truth.** Every deploy uses `infra/*-task.json` from Git. Changes made by hand in AWS (like the model in [5.1](#51-change-configuration-eg-the-llm-model)) are **overwritten by the next push**, so make changes in the file and push.
+
 ---
 
 ## 5. Day-to-day operations
+
+**The normal way to change anything is: edit the code or the `infra/` file → commit → push to `main`.** The pipeline does the rest. The manual commands below are for emergencies, debugging, or when the pipeline isn't set up.
 
 ### 5.1 Change configuration (e.g. the LLM model)
 
@@ -565,5 +626,6 @@ foreach ($ev in $events.Events) { $e = $ev.CloudTrailEvent | ConvertFrom-Json; "
 7. **Parameter Store:** delete the `/chatapp/*` parameters.
 8. **CloudWatch:** delete the log groups `/ecs/chatapp-*`.
 9. **Cloud Map:** delete the namespace `chatapp` if it's still there.
-10. **IAM:** delete `chatapp-ecs-execution-role` and `chatapp-ec2-role` (detach their policies first).
-11. Check **Billing → Bills** over the next few days to confirm charges stopped.
+10. **IAM:** delete `chatapp-ecs-execution-role`, `chatapp-ec2-role` and `chatapp-github-deploy` (remove their policies first), and the GitHub OIDC identity provider.
+11. **GitHub:** remove or disable the `deploy` job, otherwise the next push fails because the AWS resources are gone.
+12. Check **Billing → Bills** over the next few days to confirm charges stopped.

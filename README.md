@@ -1,8 +1,8 @@
 # ChatApp
 
-[![CI](https://github.com/naamShahreyar/chatapp/actions/workflows/ci.yml/badge.svg)](https://github.com/naamShahreyar/chatapp/actions/workflows/ci.yml)
+[![CI/CD](https://github.com/naamShahreyar/chatapp/actions/workflows/ci.yml/badge.svg)](https://github.com/naamShahreyar/chatapp/actions/workflows/ci.yml)
 
-A full-stack AI chat application with user accounts and persistent conversation memory: a **Streamlit** frontend, a **FastAPI** backend, a **LangGraph** agent, and **PostgreSQL**, fully containerized with **Docker** and deployed on **AWS**.
+A full-stack AI chat application with user accounts and persistent conversation memory: a **Streamlit** frontend, a **FastAPI** backend, a **LangGraph** agent, and **PostgreSQL**, fully containerized with **Docker** and deployed to **AWS ECS Fargate** by a CI/CD pipeline.
 
 ## Features
 
@@ -11,8 +11,9 @@ A full-stack AI chat application with user accounts and persistent conversation 
 - **Persistent memory** — every message is stored in Postgres, and the full history is sent to the model on each turn
 - **Per-user isolation** — users can only see, read, or delete their own conversations
 - **Swappable LLM** — Google Gemini, or a built-in echo model for local development and tests (no API key, no cost)
+- **Graceful LLM failures** — if the model is overloaded or out of quota, users get a clear "try again" message (HTTP 503) and nothing half-finished is saved
 - **One-command local setup** with Docker Compose
-- **CI** on every push: tests, then Docker image builds
+- **CI/CD** — every push is tested and built; pushes to `main` deploy automatically to AWS with no stored AWS keys
 
 ## Architecture
 
@@ -49,8 +50,8 @@ The agent module takes plain message dicts and returns a string. It doesn't know
 | Auth | Argon2 password hashing (pwdlib), JWT (PyJWT) |
 | Testing | pytest, FastAPI TestClient, in-memory SQLite |
 | Containers | Docker, Docker Compose |
-| CI | GitHub Actions |
-| Cloud | AWS: ECR, EC2, IAM, Session Manager |
+| CI/CD | GitHub Actions, OIDC federation to AWS |
+| Cloud | AWS: ECS Fargate, ECR, RDS, Application Load Balancer, SSM Parameter Store, CloudWatch Logs, IAM, Organizations |
 
 ## Project structure
 
@@ -76,9 +77,12 @@ The agent module takes plain message dicts and returns a string. It doesn't know
 │   ├── app.py                # Streamlit UI
 │   ├── Dockerfile
 │   └── requirements.txt
+├── infra/                    # AWS config as code: ECS task definitions, Service Connect, IAM policies
+├── docs/
+│   └── aws-runbook.md        # Step-by-step AWS setup, operations, troubleshooting, teardown
 ├── docker-compose.yml        # Local development: builds images from source
-├── docker-compose.prod.yml   # Production: runs images from ECR, secrets from .env
-└── .github/workflows/ci.yml  # Tests + image builds on every push
+├── docker-compose.prod.yml   # Single-server deployment: runs images from ECR, secrets from .env
+└── .github/workflows/ci.yml  # Test → build → deploy to ECS
 ```
 
 ## Quick start (Docker)
@@ -155,7 +159,7 @@ cd backend
 pytest -v
 ```
 
-Tests run against a fresh in-memory SQLite database for each test and always use the echo model, so they need no Docker, network, or API key. They cover signup and login, token protection, conversation memory, titles, deletion, and isolation between users.
+Tests run against a fresh in-memory SQLite database for each test and always use the echo model, so they need no Docker, network, or API key. They cover signup and login, token protection, conversation memory, titles, deletion, isolation between users, and LLM failures (a simulated outage must return 503 and save nothing).
 
 ## API
 
@@ -171,23 +175,52 @@ All endpoints except signup, login, and health checks require an `Authorization:
 | `POST` | `/conversations` | Start a conversation |
 | `GET` | `/conversations` | List your conversations |
 | `GET` | `/conversations/{id}/messages` | A conversation's message history |
-| `POST` | `/conversations/{id}/messages` | Send a message and get the AI reply |
+| `POST` | `/conversations/{id}/messages` | Send a message and get the AI reply (`503` if the model is unavailable) |
 | `DELETE` | `/conversations/{id}` | Delete a conversation and its messages |
 
 Requests for another user's conversation return `404`, so the API never confirms that a conversation exists.
 
-## CI
+## CI/CD
 
-GitHub Actions ([`ci.yml`](.github/workflows/ci.yml)) runs on every push to `main` and on every pull request:
+GitHub Actions ([`ci.yml`](.github/workflows/ci.yml)) runs on every pull request and every push to `main`:
 
 1. **test** — installs dependencies and runs pytest
 2. **build** — builds both Docker images; runs only if the tests pass
+3. **deploy** — pushes to `main` only:
+   - gets **temporary AWS credentials through OIDC**. No AWS keys are stored in GitHub, and the IAM role trusts only this repository's `main` branch
+   - builds and pushes both images to ECR, tagged with the **commit SHA**
+   - registers new ECS task definition revisions from [`infra/`](infra/) and rolls them out
+   - waits until ECS reports the services stable, and fails the run otherwise
+
+Pull requests never deploy. Deploys are serialized, so a second push waits for the first to finish.
 
 ## Deployment (AWS)
 
-### Current: a single EC2 instance
+```mermaid
+flowchart LR
+    U([Browser]) -->|:80| ALB[Application Load Balancer]
+    ALB -->|:8501| F[frontend · ECS Fargate]
+    F -->|:8000 Service Connect| B[backend · ECS Fargate]
+    B -->|:5432| D[(RDS PostgreSQL)]
+    B --> G[Gemini API]
+    S[SSM Parameter Store] -. secrets at start-up .-> B
+```
 
-Images are pushed to **Amazon ECR** and run on an **EC2** instance with `docker-compose.prod.yml`:
+### Current: ECS Fargate
+
+- **ECS Fargate** runs the frontend and backend as services, with no servers to manage. Failed tasks are replaced automatically, and deploys are rolling with zero downtime.
+- An **Application Load Balancer** provides a stable URL and health-checks the frontend.
+- **ECS Service Connect** lets the frontend reach the backend at `http://backend:8000`, the same address as in Docker Compose.
+- **Amazon RDS** for PostgreSQL has no public IP.
+- **Security groups are chained:** load balancer → frontend → backend → database. Each layer accepts traffic only from the one in front of it.
+- **Secrets** (database URL, JWT secret, Gemini key) are stored encrypted in **SSM Parameter Store** and injected at container start. They're never in images or in Git.
+- Logs go to **CloudWatch Logs**.
+
+Full setup, operations and teardown: **[docs/aws-runbook.md](docs/aws-runbook.md)**.
+
+### Alternative: a single EC2 instance
+
+The same images can also run on one **EC2** instance with `docker-compose.prod.yml`:
 
 - The instance pulls from ECR using an **IAM role**, so no access keys are stored on the server.
 - Admin access is through **AWS Systems Manager Session Manager**, so port 22 isn't open.
@@ -207,19 +240,12 @@ docker push <account-id>.dkr.ecr.<region>.amazonaws.com/chatapp-backend:latest
 sudo docker compose -f docker-compose.prod.yml up -d
 ```
 
-### Planned: ECS Fargate
-
-- Containers on **ECS Fargate** behind an **Application Load Balancer**
-- **Amazon RDS** for PostgreSQL
-- Secrets in **SSM Parameter Store** and logs in **CloudWatch**
-- Security groups chained so each layer only accepts traffic from the layer in front of it
-- **Continuous deployment** from GitHub Actions using OIDC (no stored AWS keys)
-
 ## Roadmap
 
-- [ ] ECS Fargate + RDS deployment
-- [ ] Continuous deployment from GitHub Actions
+- [x] ECS Fargate + RDS deployment
+- [x] Continuous deployment from GitHub Actions
 - [ ] HTTPS with a custom domain
+- [ ] Fallback LLM model when the primary is overloaded or out of quota
 - [ ] Database migrations with Alembic (replacing `create_all`)
 - [ ] Run CI tests against a real Postgres service container
 - [ ] Stream responses token by token
