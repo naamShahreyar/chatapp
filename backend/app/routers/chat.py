@@ -7,6 +7,9 @@ from app.db import get_db
 from app.deps import get_current_user
 from app.models import Conversation, Message, User
 from app.schemas import ChatRequest, ConversationOut, MessageOut
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/conversations", tags=["chat"])
 
@@ -57,7 +60,15 @@ def send_message(
 
     history = [{"role": m.role, "content": m.content} for m in conversation.messages]
     history.append({"role": "user", "content": payload.content})
-    reply = generate_reply(history)
+    try:
+        reply = generate_reply(history)
+    except Exception:
+        logger.exception("LLM call failed for conversation %s", conversation.id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The AI model is busy right now. Please try again in a moment.",
+        )
+
 
     if not conversation.messages:
         conversation.title = payload.content[:50]

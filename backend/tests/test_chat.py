@@ -37,3 +37,17 @@ def test_delete_conversation(client, login):
 
     assert client.delete(f"/conversations/{conv_id}", headers=headers).status_code == 204
     assert client.get(f"/conversations/{conv_id}/messages", headers=headers).status_code == 404
+
+def test_llm_failure_returns_503_and_saves_nothing(client, login, monkeypatch):
+    def broken_llm(history):
+        raise RuntimeError("model overloaded")
+
+    monkeypatch.setattr("app.routers.chat.generate_reply", broken_llm)
+
+    headers = login()
+    conv_id = client.post("/conversations", headers=headers).json()["id"]
+    r = client.post(f"/conversations/{conv_id}/messages", headers=headers, json={"content": "hi"})
+
+    assert r.status_code == 503
+    assert "try again" in r.json()["detail"]
+    assert client.get(f"/conversations/{conv_id}/messages", headers=headers).json() == []

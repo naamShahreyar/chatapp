@@ -95,7 +95,11 @@ def chat_page():
                 r = api("POST", f"/conversations/{conversation_id}/messages", json={"content": prompt})
             if r.ok:
                 st.rerun()
-            st.error(f"Something went wrong (status {r.status_code}). Try again.")
+            if r.status_code == 503:
+                st.warning(r.json()["detail"])
+            else:
+                st.error(f"Something went wrong (status {r.status_code}). Try again.")
+
 
 
 if "token" in st.session_state:
