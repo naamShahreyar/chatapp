@@ -79,7 +79,8 @@ The agent module takes plain message dicts and returns a string. It doesn't know
 │   └── requirements.txt
 ├── infra/                    # AWS config as code: ECS task definitions, Service Connect, IAM policies
 ├── docs/
-│   └── aws-runbook.md        # Step-by-step AWS setup, operations, troubleshooting, teardown
+│   ├── aws-runbook.md        # Step-by-step AWS setup, operations, troubleshooting, teardown
+│   └── aws-concepts.md       # Study guide: the 11 AWS concepts behind this project
 ├── docker-compose.yml        # Local development: builds images from source
 ├── docker-compose.prod.yml   # Single-server deployment: runs images from ECR, secrets from .env
 └── .github/workflows/ci.yml  # Test → build → deploy to ECS
